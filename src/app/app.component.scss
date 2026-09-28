@@ -116,6 +116,23 @@ blockquote { margin: 0 0 15px; padding: 15px 18px; border-left: 4px solid #ef835
 .discussion-list header time { margin-left: auto; color: #9aabad; }
 .discussion-list p { margin: 6px 0; color: #526a72; font-size: 12px; line-height: 1.6; }
 .discussion-list p b { color: #c86a38; }
+.anchor-hint { margin: 10px 0 0; color: #8a9aa0; font-size: 11px; line-height: 1.6; }
+.orphan-alert { margin-top: 13px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.orphan-alert p { margin: 4px 0 0; font-size: 12px; line-height: 1.6; }
+.discussion-list article.orphaned { border: 1px solid #efb4a5; background: #fff5f2; }
+.discussion-list article.voided { opacity: .6; background: #f1f4f4; }
+.discussion-tag { margin: 5px 0; display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tag { padding: 3px 9px; border-radius: 999px; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.tag.anchored { color: #21795c; background: #e1f5ec; }
+.tag.orphaned { color: #b84c38; background: #ffe5de; }
+.tag.voided { color: #6f8087; background: #e7edee; }
+.void-time { color: #93a2a7; font-size: 10px; }
+.orphan-box { display: block; padding: 10px 12px; border-radius: 10px; background: rgba(204,91,70,.06); }
+.original-sentence { margin: 6px 0 8px !important; color: #9c5a4c !important; font-size: 11px !important; line-height: 1.6; }
+.reanchor-row { display: flex; gap: 8px; align-items: center; }
+.reanchor-row nb-select { flex: 1; min-width: 0; }
+.discussion-actions { display: flex; gap: 6px; }
+.snapshot-discussions { color: #b07c5a !important; }
 .role-review-card article { padding: 12px 0; border-bottom: 1px solid #edf1f1; }
 .role-review-card article:first-child { padding-top: 0; }
 .role-review-card article > header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }

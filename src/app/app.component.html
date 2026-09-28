@@ -115,6 +115,13 @@
                 <b *ngIf="isSentenceDiscussed(i)">讨论</b>
               </button>
             </div>
+            <nb-alert status="danger" class="orphan-alert" *ngIf="activeOrphanedCount">
+              <div>
+                <strong>{{ activeOrphanedCount }} 条讨论的原句已不在当前正文</strong>
+                <p>这些意见创建时指向的句子被改动或删除，已标为待重新定位，不会自动挂到新句。锁定版本前必须逐条重新挂载或确认作废。</p>
+              </div>
+              <button nbButton size="tiny" status="danger" (click)="activeView = 'review'">前往处理</button>
+            </nb-alert>
           </nb-card-body>
         </nb-card>
       </div>
@@ -190,7 +197,7 @@
 
     <section *ngIf="activeView === 'review'" class="view-section">
       <div class="section-heading">
-        <div><span class="eyebrow">多人协作</span><h2>分角色审阅与逐句讨论</h2><p>审阅意见绑定具体句子，处理结果随草稿保存在当前浏览器。</p></div>
+        <div><span class="eyebrow">多人协作</span><h2>分角色审阅与逐句讨论</h2><p>每条讨论记住创建时指向的原句；正文改动后原句找不到的会标为待重新定位，须重新挂载或确认作废。处理结果随离线草稿、撤销重做和锁定版本一并保存。</p></div>
         <div class="role-picker"><span>当前身份</span>
           <nb-select [ngModel]="currentRole" (ngModelChange)="currentRole = $event">
             <nb-option *ngFor="let role of roles" [value]="role">{{ role }}</nb-option>
@@ -200,20 +207,59 @@
       <div class="review-grid">
         <div class="main-column">
           <nb-card class="panel">
-            <nb-card-header><div><span class="section-kicker">逐句讨论</span><h3>{{ selectedLanguage.name }} · 第 {{ selectedSentenceIndex + 1 }} 句</h3></div></nb-card-header>
+            <nb-card-header>
+              <div><span class="section-kicker">逐句讨论</span><h3>{{ selectedLanguage.name }} · 第 {{ selectedSentenceIndex + 1 }} 句</h3></div>
+              <span class="count-pill danger" *ngIf="activeOrphanedCount">待定位 {{ activeOrphanedCount }}</span>
+            </nb-card-header>
             <nb-card-body>
               <blockquote>{{ currentSentences[selectedSentenceIndex] || '请先在编写页选择句子' }}</blockquote>
               <div class="discussion-compose">
                 <textarea nbInput fullWidth rows="3" [disabled]="isLocked" [(ngModel)]="discussionText" placeholder="输入修改依据、术语解释或确认意见…"></textarea>
-                <button nbButton status="primary" [disabled]="isLocked || !discussionText.trim()" (click)="addDiscussion()">添加讨论</button>
+                <button nbButton status="primary" [disabled]="isLocked || !discussionText.trim() || !currentSentences[selectedSentenceIndex]" (click)="addDiscussion()">添加讨论</button>
               </div>
+              <p class="anchor-hint">讨论记住创建时指向的原句；正文改动后若原句找不到，会自动标为“待重新定位”，不会挂到其他句子上。</p>
               <div class="discussion-list">
-                <article *ngFor="let discussion of activeDiscussions" [class.resolved]="discussion.resolved">
+                <article *ngFor="let discussion of activeDiscussions"
+                         [class.orphaned]="discussionStatus(discussion) === 'orphaned'"
+                         [class.voided]="discussionStatus(discussion) === 'voided'"
+                         [class.resolved]="discussion.resolved && discussionStatus(discussion) === 'anchored'">
                   <div class="avatar">{{ discussion.author.slice(0, 1) }}</div>
                   <div>
-                    <header><strong>{{ discussion.author }}</strong><span>{{ discussion.role }}</span><time>{{ formatDateTime(discussion.createdAt) }}</time></header>
-                    <p><b>第 {{ discussion.sentenceIndex + 1 }} 句</b> {{ discussion.text }}</p>
-                    <button nbButton size="tiny" [status]="discussion.resolved ? 'success' : 'basic'" (click)="toggleDiscussion(discussion.id)">{{ discussion.resolved ? '已解决' : '标记解决' }}</button>
+                    <header>
+                      <strong>{{ discussion.author }}</strong><span>{{ discussion.role }}</span>
+                      <time>{{ formatDateTime(discussion.createdAt) }}</time>
+                    </header>
+
+                    <div class="discussion-tag" *ngIf="discussionStatus(discussion) === 'anchored'">
+                      <b class="tag anchored">已锚定 · 第 {{ discussionSentenceIndex(discussion) + 1 }} 句</b>
+                    </div>
+                    <div class="discussion-tag orphan-box" *ngIf="discussionStatus(discussion) === 'orphaned'">
+                      <b class="tag orphaned">待重新定位</b>
+                      <p class="original-sentence">原句：{{ discussion.anchorSentence }}</p>
+                      <div class="reanchor-row">
+                        <nb-select [disabled]="isLocked || !reanchorTargets(discussion).length"
+                                   [ngModel]="discussion.id"
+                                   (ngModelChange)="onReanchorPick(discussion.id, $event)">
+                          <nb-option [value]="discussion.id" disabled>选择要挂载的当前句子…</nb-option>
+                          <nb-option *ngFor="let target of reanchorTargets(discussion); let t = index" [value]="discussion.id + '-' + t">
+                            第 {{ t + 1 }} 句 · {{ target }}
+                          </nb-option>
+                        </nb-select>
+                        <button nbButton size="tiny" status="danger" [disabled]="isLocked" (click)="voidDiscussion(discussion.id)">确认作废</button>
+                      </div>
+                    </div>
+                    <div class="discussion-tag" *ngIf="discussionStatus(discussion) === 'voided'">
+                      <b class="tag voided">已作废</b><span class="void-time" *ngIf="discussion.voidedAt">{{ formatDateTime(discussion.voidedAt) }} 确认</span>
+                    </div>
+
+                    <p>{{ discussion.text }}</p>
+
+                    <div class="discussion-actions" *ngIf="discussionStatus(discussion) === 'anchored'">
+                      <button nbButton size="tiny" [status]="discussion.resolved ? 'success' : 'basic'" [disabled]="isLocked" (click)="toggleDiscussion(discussion.id)">{{ discussion.resolved ? '已解决' : '标记解决' }}</button>
+                    </div>
+                    <div class="discussion-actions" *ngIf="discussionStatus(discussion) === 'voided'">
+                      <button nbButton size="tiny" status="basic" [disabled]="isLocked" (click)="reopenDiscussion(discussion.id)">撤销作废（回到待定位）</button>
+                    </div>
                   </div>
                 </article>
                 <p *ngIf="!activeDiscussions.length" class="empty-copy">当前语言还没有讨论意见。</p>
@@ -252,7 +298,7 @@
             <nb-card-body class="timeline">
               <article *ngFor="let version of draft.versions; let last = last" [class.current]="last">
                 <span></span>
-                <div><b>{{ version.version }}</b><strong>{{ version.label }}</strong><p>{{ formatDateTime(version.createdAt) }} · {{ version.channels.length }} 个渠道</p><small *ngIf="version.emergency">紧急修订</small></div>
+                <div><b>{{ version.version }}</b><strong>{{ version.label }}</strong><p>{{ formatDateTime(version.createdAt) }} · {{ version.channels.length }} 个渠道</p><p class="snapshot-discussions">讨论 {{ version.discussions.length }} 条 · 作废 {{ versionDiscussionsVoided(version.id) }} 条</p><small *ngIf="version.emergency">紧急修订</small></div>
               </article>
             </nb-card-body>
           </nb-card>
