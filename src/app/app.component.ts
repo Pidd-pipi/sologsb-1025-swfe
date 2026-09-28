@@ -21,6 +21,7 @@ type WorkspaceView = 'compose' | 'checks' | 'review' | 'versions';
 type ReviewStatus = 'pending' | 'approved' | 'changes';
 type NoticeStatus = 'draft' | 'in-review' | 'locked';
 type CheckLevel = 'error' | 'warning' | 'info';
+type DiscussionAnchorState = 'anchored' | 'orphaned' | 'voided';
 
 interface LanguageVersion {
   id: string;
@@ -35,12 +36,29 @@ interface LanguageVersion {
 interface Discussion {
   id: string;
   languageId: string;
-  sentenceIndex: number;
+  /** @deprecated 旧数据只记录句序号，改文后会错位；新数据以 anchorText 为准 */
+  sentenceIndex?: number;
+  /** 创建讨论时指向的原句原文，正文改动后据此重新判断落点 */
+  anchorText: string;
+  /** 重新挂接后指向的当前句序号；未重新挂接时通过 anchorText 匹配 */
+  relocatedIndex?: number;
+  /** 确认作废：原句已删除且该意见不再适用 */
+  voided?: boolean;
   author: string;
   role: string;
   text: string;
   createdAt: string;
   resolved: boolean;
+}
+
+/** 讨论锚点在当前正文上的实时判定结果 */
+interface DiscussionBinding {
+  state: DiscussionAnchorState;
+  /** 落在当前正文的句序号；待重新定位或已作废时为 -1 */
+  index: number;
+  /** 经重新挂接确认（而非仅按原句文本自动匹配） */
+  relocated: boolean;
+  sentence: string;
 }
 
 interface RoleReview {
@@ -63,6 +81,8 @@ interface VersionSnapshot {
   expiresAt: string;
   channels: string[];
   languages: LanguageVersion[];
+  /** 锁定时讨论及其重新定位/作废处理结果，随历史版本一并恢复 */
+  discussions: Discussion[];
   note: string;
   emergency: boolean;
 }
@@ -138,6 +158,7 @@ function initialDraft(): NoticeDraft {
     channels: ['短信', '广播', '社区大屏'],
     note: '发布范围覆盖滨海新区。',
     emergency: false,
+    discussions: [],
     languages: [
       {
         id: 'zh-CN', locale: 'zh-CN', name: '简体中文', title: '台风“海燕”橙色预警通知',
@@ -174,6 +195,14 @@ function initialDraft(): NoticeDraft {
         title: 'Orange alert and evacuation notice for Typhoon Haiyan',
         body: 'Residents in Binhai New Area should stop outdoor activities immediately. Residents of coastal subdistricts must move to the nearest shelter before 17:00 today. Strong winds and heavy rain are expected this afternoon. Stay away from temporary structures and monitor further notices.'
       } as LanguageVersion
+    ],
+    discussions: [
+      {
+        id: 'comment-snapshot-v1-1', languageId: 'zh-CN',
+        anchorText: '沿海街道居民请于今日17时前转移至就近安置点。',
+        author: '陈冉', role: '法务审阅', text: '17时的截止时间建议与属地安置点开放时间核对一致。',
+        createdAt: '2026-09-24T09:50:00+08:00', resolved: true
+      }
     ]
   };
 
@@ -207,7 +236,9 @@ function initialDraft(): NoticeDraft {
     ],
     discussions: [
       {
-        id: 'comment-1', languageId: 'zh-CN', sentenceIndex: 1, author: '陈冉', role: '法务审阅',
+        id: 'comment-1', languageId: 'zh-CN', sentenceIndex: 1,
+        anchorText: '沿海街道居民请于今日17时前转移至就近安置点。',
+        author: '陈冉', role: '法务审阅',
         text: '建议明确安置点地址由属地另行发送，避免通知被理解为完整点位清单。', createdAt: '2026-09-25T08:16:00+08:00', resolved: false
       }
     ],
@@ -312,6 +343,8 @@ export class AppComponent implements OnInit {
   lastSavedAt = '';
   history: NoticeDraft[] = [];
   future: NoticeDraft[] = [];
+  /** 每条待重新定位讨论临时选择的新句（仅界面状态，确认提交后写入草稿） */
+  relocateTargets: Record<string, number> = {};
 
   constructor(private readonly toastr: NbToastrService) {}
 
@@ -356,7 +389,20 @@ export class AppComponent implements OnInit {
   }
 
   get unresolvedDiscussionCount(): number {
-    return this.draft.discussions.filter((discussion) => !discussion.resolved).length;
+    return this.draft.discussions.filter((discussion) => !discussion.resolved && !discussion.voided).length;
+  }
+
+  /** 原句在当前正文中找不到、等待人工处理（重新挂接或作废）的讨论 */
+  get orphanedDiscussions(): Discussion[] {
+    return this.draft.discussions.filter((discussion) => !discussion.voided && this.bindingFor(discussion).state === 'orphaned');
+  }
+
+  get orphanedDiscussionCount(): number {
+    return this.orphanedDiscussions.length;
+  }
+
+  get activeOrphanedDiscussions(): Discussion[] {
+    return this.orphanedDiscussions.filter((discussion) => discussion.languageId === this.selectedLanguageId);
   }
 
   get currentSentences(): string[] {
@@ -427,10 +473,15 @@ export class AppComponent implements OnInit {
       id: 'time-expires', category: '时间冲突', level: 'error', title: '失效时间早于生效时间',
       detail: '通知有效期必须晚于生效时间。'
     });
-    const unresolved = this.draft.discussions.filter((discussion) => !discussion.resolved).length;
+    const unresolved = this.draft.discussions.filter((discussion) => !discussion.resolved && !discussion.voided).length;
     if (unresolved) checks.push({
       id: 'discussions', category: '逐句讨论', level: 'warning', title: `${unresolved} 条讨论尚未解决`,
       detail: '发布前请处理或明确忽略未解决讨论。'
+    });
+    if (this.orphanedDiscussionCount) checks.push({
+      id: 'discussion-orphans', category: '讨论定位', level: 'error',
+      title: `${this.orphanedDiscussionCount} 条讨论待重新定位`,
+      detail: '正文改动后原句已找不到。请把讨论重新挂到当前某一句，或确认作废；未处理完不能锁定版本。'
     });
     return checks;
   }
@@ -456,7 +507,44 @@ export class AppComponent implements OnInit {
   }
 
   isSentenceDiscussed(index: number): boolean {
-    return this.activeDiscussions.some((discussion) => discussion.sentenceIndex === index && !discussion.resolved);
+    return this.activeDiscussions.some((discussion) => {
+      if (discussion.resolved || discussion.voided) return false;
+      return this.bindingFor(discussion).index === index;
+    });
+  }
+
+  /** 依据创建时记录的原句，重新判断讨论是否仍落在当前正文上 */
+  bindingFor(discussion: Discussion): DiscussionBinding {
+    if (discussion.voided) {
+      return { state: 'voided', index: -1, relocated: false, sentence: '' };
+    }
+    const language = this.draft.languages.find((item) => item.id === discussion.languageId);
+    const sentences = this.splitSentences(language?.body ?? '');
+    if (discussion.relocatedIndex !== undefined) {
+      const index = discussion.relocatedIndex;
+      if (index >= 0 && index < sentences.length) {
+        return { state: 'anchored', index, relocated: true, sentence: sentences[index] };
+      }
+      return { state: 'orphaned', index: -1, relocated: true, sentence: '' };
+    }
+    const index = sentences.indexOf(discussion.anchorText);
+    if (index >= 0) return { state: 'anchored', index, relocated: false, sentence: discussion.anchorText };
+    return { state: 'orphaned', index: -1, relocated: false, sentence: '' };
+  }
+
+  /** 待重新定位讨论在下拉框中临时选中的句序号 */
+  relocateTargetFor(discussionId: string): number {
+    return this.relocateTargets[discussionId] ?? 0;
+  }
+
+  setRelocateTarget(discussionId: string, index: number): void {
+    this.relocateTargets[discussionId] = index;
+  }
+
+  /** 讨论创建时所在语言的当前句列表，供重新挂接选择 */
+  sentencesForDiscussion(discussion: Discussion): string[] {
+    const language = this.draft.languages.find((item) => item.id === discussion.languageId);
+    return this.splitSentences(language?.body ?? '');
   }
 
   get nextVersion(): string {
@@ -515,15 +603,56 @@ export class AppComponent implements OnInit {
   addDiscussion(): void {
     const text = this.discussionText.trim();
     if (!text || this.isLocked) return;
+    const anchorText = this.currentSentences[this.selectedSentenceIndex];
+    if (!anchorText) {
+      this.toastr.warning('请先在正文句列表中选择一句，再添加讨论。', '无法绑定句子');
+      return;
+    }
     this.commit((draft) => {
       draft.discussions.push({
-        id: uid('discussion'), languageId: this.selectedLanguageId, sentenceIndex: this.selectedSentenceIndex,
+        id: uid('discussion'), languageId: this.selectedLanguageId,
+        sentenceIndex: this.selectedSentenceIndex, anchorText,
         author: this.currentRole === '法务' ? '陈冉' : this.currentRole === '翻译' ? '周晴' : '林晓',
         role: `${this.currentRole}审阅`, text, createdAt: new Date().toISOString(), resolved: false
       });
     });
     this.discussionText = '';
-    this.toastr.success('讨论已绑定到当前句。', '已添加');
+    this.toastr.success('讨论已记住创建时指向的原句，正文改动后会自动复核落点。', '已添加');
+  }
+
+  /** 把待重新定位的讨论重新挂到当前正文的某一句 */
+  relocateDiscussion(discussionId: string): void {
+    if (this.isLocked) return;
+    const target = this.relocateTargets[discussionId] ?? 0;
+    this.commit((draft) => {
+      const item = draft.discussions.find((discussion) => discussion.id === discussionId);
+      if (!item || item.voided) return;
+      const language = draft.languages.find((lang) => lang.id === item.languageId);
+      const sentences = this.splitSentences(language?.body ?? '');
+      if (target < 0 || target >= sentences.length) return;
+      item.relocatedIndex = target;
+    });
+    delete this.relocateTargets[discussionId];
+    this.toastr.success('讨论已重新挂接到当前句子，处理结果随草稿保存。', '重新定位完成');
+  }
+
+  /** 确认作废：原句已不存在且该意见不再适用 */
+  voidDiscussion(discussionId: string): void {
+    if (this.isLocked) return;
+    this.commit((draft) => {
+      const item = draft.discussions.find((discussion) => discussion.id === discussionId);
+      if (item) item.voided = true;
+    });
+    this.toastr.info('该讨论已确认作废，不再参与发布前检查。', '讨论已作废');
+  }
+
+  /** 撤销作废，回到待重新定位状态重新处理 */
+  restoreDiscussion(discussionId: string): void {
+    if (this.isLocked) return;
+    this.commit((draft) => {
+      const item = draft.discussions.find((discussion) => discussion.id === discussionId);
+      if (item) item.voided = false;
+    });
   }
 
   toggleDiscussion(discussionId: string): void {
@@ -574,7 +703,9 @@ export class AppComponent implements OnInit {
       id: uid('version'), label: '最终锁定版本', createdAt: new Date().toISOString(), version: this.nextVersion,
       title: this.draft.title, severity: this.draft.severity, scope: this.draft.scope, eventAt: this.draft.eventAt,
       effectiveAt: this.draft.effectiveAt, expiresAt: this.draft.expiresAt, channels: [...this.draft.channels],
-      languages: clone(this.draft.languages), note: '发布前检查通过并锁定。', emergency: false
+      languages: clone(this.draft.languages),
+      discussions: clone(this.draft.discussions),
+      note: '发布前检查通过并锁定。', emergency: false
     };
     this.commit((draft) => {
       draft.versions.push(snapshot);
@@ -605,7 +736,11 @@ export class AppComponent implements OnInit {
       const locale = check.id.split('-').at(-1);
       if (locale && this.draft.languages.some((language) => language.id === locale)) this.selectedLanguageId = locale;
       this.activeView = 'compose';
-    } else if (check.id === 'discussions') {
+    } else if (check.id === 'discussions' || check.id === 'discussion-orphans') {
+      const firstOrphan = this.orphanedDiscussions[0];
+      if (firstOrphan && this.draft.languages.some((language) => language.id === firstOrphan.languageId)) {
+        this.selectedLanguageId = firstOrphan.languageId;
+      }
       this.activeView = 'review';
     }
   }
@@ -669,6 +804,16 @@ export class AppComponent implements OnInit {
     value.discussions ??= [];
     value.reviews ??= [];
     value.requiredLocales ??= ['zh-CN'];
+    // 旧讨论只存了句序号：尽量用创建时语言正文里的同序号句子回填原句锚点；
+    // 找不到（如正文已变）则锚点留空，会被判定为待重新定位。
+    value.discussions.forEach((discussion) => {
+      if (discussion.anchorText !== undefined) return;
+      const language = value.languages.find((item) => item.id === discussion.languageId);
+      const sentences = this.splitSentences(language?.body ?? '');
+      const index = discussion.sentenceIndex ?? 0;
+      discussion.anchorText = sentences[index] ?? '';
+    });
+    value.versions.forEach((version) => { version.discussions ??= []; });
     return value;
   }
 

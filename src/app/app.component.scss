@@ -61,6 +61,8 @@ nb-card-body { padding: 18px 20px 20px; }
 .body-heading small { color: #819399; font-weight: 400; }
 .document-editor { width: 100%; min-height: 220px; padding: 18px; resize: vertical; border: 1px solid #cfdddd; border-radius: 12px; outline: 0; color: #253b43; background: #fff; font-size: 16px; line-height: 1.9; }
 .document-editor:focus { border-color: #3c7b83; box-shadow: 0 0 0 3px rgba(60,123,131,.12); }
+.orphan-alert { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; font-size: 12px; line-height: 1.55; }
+.orphan-alert nb-icon { flex: 0 0 auto; }
 .sentence-strip { display: grid; gap: 7px; margin-top: 13px; }
 .sentence-strip button { border: 1px solid #e0e9e9; border-radius: 10px; padding: 9px 11px; display: flex; align-items: center; gap: 8px; text-align: left; color: #536b73; background: #fafcfc; cursor: pointer; }
 .sentence-strip button.selected { border-color: #ef8354; background: #fff8f3; color: #713e25; }
@@ -109,6 +111,8 @@ blockquote { margin: 0 0 15px; padding: 15px 18px; border-left: 4px solid #ef835
 .discussion-list { display: grid; gap: 10px; margin-top: 18px; }
 .discussion-list article { display: flex; gap: 10px; padding: 13px; border-radius: 12px; background: #f6f9f9; }
 .discussion-list article.resolved { opacity: .58; }
+.discussion-list article.orphaned { border: 1px solid #f0b4a6; background: #fff7f5; opacity: 1; }
+.discussion-list article.voided { opacity: .5; background: #f1f4f4; }
 .avatar { width: 34px; height: 34px; flex: 0 0 auto; display: grid; place-items: center; border-radius: 50%; color: #fff; background: #3e7178; font-weight: 700; }
 .discussion-list article > div:last-child { flex: 1; }
 .discussion-list header { display: flex; gap: 8px; align-items: center; font-size: 11px; }
@@ -116,6 +120,17 @@ blockquote { margin: 0 0 15px; padding: 15px 18px; border-left: 4px solid #ef835
 .discussion-list header time { margin-left: auto; color: #9aabad; }
 .discussion-list p { margin: 6px 0; color: #526a72; font-size: 12px; line-height: 1.6; }
 .discussion-list p b { color: #c86a38; }
+.anchor-box { margin: 4px 0 8px; padding: 9px 11px; border-radius: 9px; background: #fff; border: 1px solid #e4ecec; }
+.anchor-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.anchor-sentence { color: #6f838a; font-size: 11px; line-height: 1.55; flex: 1 1 200px; }
+.anchor-sentence q { color: #9a5a46; font-style: italic; }
+.anchor-tag { padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 700; white-space: nowrap; }
+.anchor-tag.anchored { color: #27795e; background: #e2f5ed; }
+.anchor-tag.orphaned { color: #b84c38; background: #ffe4de; }
+.anchor-tag.voided { color: #6f838a; background: #e8eeee; }
+.relocate-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; }
+.relocate-row nb-select { width: min(320px, 100%); }
+.discussion-actions { display: flex; gap: 6px; }
 .role-review-card article { padding: 12px 0; border-bottom: 1px solid #edf1f1; }
 .role-review-card article:first-child { padding-top: 0; }
 .role-review-card article > header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }

@@ -109,6 +109,10 @@
             <label class="field language-title"><span>翻译标题 *</span><input nbInput fullWidth [disabled]="isLocked" [ngModel]="selectedLanguage.title" (ngModelChange)="updateLanguage('title', $event)"></label>
             <div class="body-heading"><span>正文 *</span><small>{{ currentSentences.length }} 句 · 点击句子可讨论</small></div>
             <textarea class="document-editor" [disabled]="isLocked" [ngModel]="selectedLanguage.body" (ngModelChange)="updateLanguage('body', $event)"></textarea>
+            <nb-alert status="danger" class="orphan-alert" *ngIf="activeOrphanedDiscussions.length">
+              <span><strong>{{ activeOrphanedDiscussions.length }} 条讨论的原句在当前正文中已找不到</strong>（待重新定位）。请重新挂到当前某句或确认作废，否则不能锁定版本。</span>
+              <button nbButton size="tiny" status="danger" (click)="activeView = 'review'">前往处理</button>
+            </nb-alert>
             <div class="sentence-strip" *ngIf="currentSentences.length">
               <button *ngFor="let sentence of currentSentences; let i = index" [class.selected]="i === selectedSentenceIndex" (click)="selectSentence(i)">
                 <span>{{ i + 1 }}</span>{{ sentence }}
@@ -137,6 +141,7 @@
             <div class="check-overview" (click)="activeView = 'checks'">
               <div><strong>必填与语言</strong><span>{{ checks.length }} 项结果</span></div>
               <div><strong>阻断问题</strong><span class="danger-text">{{ blockingChecks.length }} 项</span></div>
+              <div><strong>讨论待重新定位</strong><span [class.danger-text]="orphanedDiscussionCount > 0">{{ orphanedDiscussionCount }} 条</span></div>
               <div><strong>未解决讨论</strong><span>{{ unresolvedDiscussionCount }} 条</span></div>
             </div>
             <button nbButton fullWidth status="basic" (click)="activeView = 'checks'">查看完整检查</button>
@@ -190,7 +195,7 @@
 
     <section *ngIf="activeView === 'review'" class="view-section">
       <div class="section-heading">
-        <div><span class="eyebrow">多人协作</span><h2>分角色审阅与逐句讨论</h2><p>审阅意见绑定具体句子，处理结果随草稿保存在当前浏览器。</p></div>
+        <div><span class="eyebrow">多人协作</span><h2>分角色审阅与逐句讨论</h2><p>讨论记住创建时的原句；正文改动后原句找不到的会标为待重新定位，重新挂接或作废的结果随草稿、撤销重做和历史版本一并保存。</p></div>
         <div class="role-picker"><span>当前身份</span>
           <nb-select [ngModel]="currentRole" (ngModelChange)="currentRole = $event">
             <nb-option *ngFor="let role of roles" [value]="role">{{ role }}</nb-option>
@@ -199,8 +204,11 @@
       </div>
       <div class="review-grid">
         <div class="main-column">
-          <nb-card class="panel">
-            <nb-card-header><div><span class="section-kicker">逐句讨论</span><h3>{{ selectedLanguage.name }} · 第 {{ selectedSentenceIndex + 1 }} 句</h3></div></nb-card-header>
+          <nb-card class="panel discussion-card">
+            <nb-card-header>
+              <div><span class="section-kicker">逐句讨论</span><h3>{{ selectedLanguage.name }} · 第 {{ selectedSentenceIndex + 1 }} 句</h3></div>
+              <span class="count-pill danger" *ngIf="activeOrphanedDiscussions.length">{{ activeOrphanedDiscussions.length }} 待重新定位</span>
+            </nb-card-header>
             <nb-card-body>
               <blockquote>{{ currentSentences[selectedSentenceIndex] || '请先在编写页选择句子' }}</blockquote>
               <div class="discussion-compose">
@@ -208,12 +216,52 @@
                 <button nbButton status="primary" [disabled]="isLocked || !discussionText.trim()" (click)="addDiscussion()">添加讨论</button>
               </div>
               <div class="discussion-list">
-                <article *ngFor="let discussion of activeDiscussions" [class.resolved]="discussion.resolved">
+                <article *ngFor="let discussion of activeDiscussions"
+                         [class.resolved]="discussion.resolved"
+                         [class.orphaned]="bindingFor(discussion).state === 'orphaned'"
+                         [class.voided]="bindingFor(discussion).state === 'voided'">
                   <div class="avatar">{{ discussion.author.slice(0, 1) }}</div>
                   <div>
-                    <header><strong>{{ discussion.author }}</strong><span>{{ discussion.role }}</span><time>{{ formatDateTime(discussion.createdAt) }}</time></header>
-                    <p><b>第 {{ discussion.sentenceIndex + 1 }} 句</b> {{ discussion.text }}</p>
-                    <button nbButton size="tiny" [status]="discussion.resolved ? 'success' : 'basic'" (click)="toggleDiscussion(discussion.id)">{{ discussion.resolved ? '已解决' : '标记解决' }}</button>
+                    <header>
+                      <strong>{{ discussion.author }}</strong><span>{{ discussion.role }}</span><time>{{ formatDateTime(discussion.createdAt) }}</time>
+                    </header>
+                    <p>{{ discussion.text }}</p>
+                    <div class="anchor-box" *ngIf="bindingFor(discussion) as binding">
+                      <ng-container *ngIf="binding.state === 'anchored'">
+                        <span class="anchor-tag anchored">{{ binding.relocated ? '已重新挂接' : '原句仍在' }}</span>
+                        <span class="anchor-sentence">指向第 {{ binding.index + 1 }} 句：{{ binding.sentence }}</span>
+                      </ng-container>
+                      <ng-container *ngIf="binding.state === 'orphaned'">
+                        <div class="anchor-row">
+                          <span class="anchor-tag orphaned">待重新定位</span>
+                          <span class="anchor-sentence">创建时的原句在当前正文中已找不到：<q>{{ discussion.anchorText || '（旧讨论未记录原句）' }}</q></span>
+                        </div>
+                        <div class="relocate-row">
+                          <nb-select size="small" [disabled]="isLocked"
+                                     [selected]="relocateTargetFor(discussion.id)"
+                                     (selectedChange)="setRelocateTarget(discussion.id, $event)">
+                            <nb-option *ngFor="let sentence of sentencesForDiscussion(discussion); let si = index" [value]="si">
+                              第 {{ si + 1 }} 句 · {{ sentence | slice:0:22 }}{{ sentence.length > 22 ? '…' : '' }}
+                            </nb-option>
+                          </nb-select>
+                          <button nbButton size="tiny" status="primary" [disabled]="isLocked" (click)="relocateDiscussion(discussion.id)">重新挂到该句</button>
+                          <button nbButton size="tiny" status="danger" [disabled]="isLocked" (click)="voidDiscussion(discussion.id)">确认作废</button>
+                        </div>
+                      </ng-container>
+                      <ng-container *ngIf="binding.state === 'voided'">
+                        <div class="anchor-row">
+                          <span class="anchor-tag voided">已作废</span>
+                          <span class="anchor-sentence">该讨论经确认不再适用，不参与发布前检查。</span>
+                          <button nbButton size="tiny" status="basic" [disabled]="isLocked" (click)="restoreDiscussion(discussion.id)">撤销作废</button>
+                        </div>
+                      </ng-container>
+                    </div>
+                    <div class="discussion-actions">
+                      <button nbButton size="tiny" [status]="discussion.resolved ? 'success' : 'basic'"
+                              [disabled]="isLocked || discussion.voided" (click)="toggleDiscussion(discussion.id)">
+                        {{ discussion.resolved ? '已解决' : '标记解决' }}
+                      </button>
+                    </div>
                   </div>
                 </article>
                 <p *ngIf="!activeDiscussions.length" class="empty-copy">当前语言还没有讨论意见。</p>
@@ -252,7 +300,7 @@
             <nb-card-body class="timeline">
               <article *ngFor="let version of draft.versions; let last = last" [class.current]="last">
                 <span></span>
-                <div><b>{{ version.version }}</b><strong>{{ version.label }}</strong><p>{{ formatDateTime(version.createdAt) }} · {{ version.channels.length }} 个渠道</p><small *ngIf="version.emergency">紧急修订</small></div>
+                <div><b>{{ version.version }}</b><strong>{{ version.label }}</strong><p>{{ formatDateTime(version.createdAt) }} · {{ version.channels.length }} 个渠道 · {{ version.discussions.length }} 条讨论</p><small *ngIf="version.emergency">紧急修订</small></div>
               </article>
             </nb-card-body>
           </nb-card>
@@ -284,7 +332,7 @@
             <nb-card-body class="version-summary">
               <article *ngFor="let version of draft.versions">
                 <div><span>{{ version.version }}</span><h3>{{ version.title }}</h3><p>{{ version.note }}</p></div>
-                <dl><dt>严重程度</dt><dd>{{ version.severity }}</dd><dt>失效</dt><dd>{{ formatDateTime(version.expiresAt) }}</dd></dl>
+                <dl><dt>严重程度</dt><dd>{{ version.severity }}</dd><dt>讨论留痕</dt><dd>{{ version.discussions.length }} 条</dd><dt>失效</dt><dd>{{ formatDateTime(version.expiresAt) }}</dd></dl>
               </article>
             </nb-card-body>
           </nb-card>
